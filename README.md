@@ -52,7 +52,9 @@ python3 app.py --validate-rom "baserom.us.z64"
    `~/.local/share/sm64-ios-builder/packages/`
    To it run on your device you should have iFile installed.
    On the iFile interface click the WiFi symbol to start the file server, note the device's IP and enter it on a web browser on your pc.
-   It is suggested to upload the .deb to your downloads folder: `/var/mobile/Media/Downloads`. Select it and hit install. If the app doesn't appear on SpringBoard you should run `uicache` in your   terminal or respring your device.
+   It is suggested to upload the .deb to your downloads folder: `/var/mobile/Media/Downloads`. Select it and hit install.
+   The app will refuse to run the game unless you place a copy of your rom (must be named exactly baserom.us.z64) under `/var/mobile/Documents`.
+   If the app doesn't appear on SpringBoard you should run `uicache` in your   terminal or respring your device.
 
 ## Binary redistribution warning
 
