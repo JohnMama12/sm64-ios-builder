@@ -34,8 +34,10 @@ python3 app.py --validate-rom "baserom.us.z64"
    only after that test succeeds. The selected SDK is iOS 6.1; the app's
    minimum deployment target remains iOS 6.0.
 
-2. Select the source repository (defaults to `JohnMama12/sm64`) and branch,
-   then choose an iOS commit.
+2. Choose a published source version from the GitHub Releases list for
+   `JohnMama12/sm64`. The builder shows release tags and notes, not every commit
+   or source tweak. Custom repositories must also publish GitHub Releases with
+   semantic version tags such as `v0.1.0-beta.1`.
 
 3. Select an authentic, legally obtained, big-endian `.z64` ROM. The only
    end-to-end supported version is US (NTSC-U), SHA-1
@@ -46,7 +48,7 @@ python3 app.py --validate-rom "baserom.us.z64"
    corresponding WSL `/mnt/c/...` path.
 
 4. Confirm you own the ROM and acknowledge the binary distribution restriction.
-   The builder checks out the selected commit, runs `make assets VERSION=us`
+   The builder checks out the selected release tag, runs `make assets VERSION=us`
    to use that source revision's existing Python extraction/build pipeline,
    then compiles the iOS app and writes a `.deb` under
    `~/.local/share/sm64-ios-builder/packages/`
@@ -58,6 +60,13 @@ python3 app.py --validate-rom "baserom.us.z64"
 
 ## Troubleshooting:
    If the app doesn't appear on SpringBoard you should run `uicache` in your   terminal or respring your device.
+
+## Versioning
+
+The source and builder repositories use Git tags and GitHub Releases following
+Semantic Versioning. The initial beta release is `v0.1.0-beta.1`; while in beta,
+increment the beta number for each published source release. The version picker
+lists only published source releases, keeping routine commits out of the choices.
 
 ## Binary redistribution warning
 

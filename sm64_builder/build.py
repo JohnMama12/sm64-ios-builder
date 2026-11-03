@@ -3,7 +3,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Tuple
 
 from .config import (
     IOS_MIN_VERSION,
@@ -27,63 +27,63 @@ class BuildError(RuntimeError):
 
 @dataclass(frozen=True)
 class BuildResult:
+    source_version: str
     source_commit: str
     rom_sha1: str
     package_path: Path
 
 
-def _build_directory(repository: str, commit: str, rom_sha1: str) -> Path:
+def _build_directory(repository: str, version: str, rom_sha1: str) -> Path:
     slug = repository.replace("/", "-").lower()
     return app_data_dir() / "builds" / (
-        "%s-%s-%s" % (slug, commit[:12], rom_sha1[:12])
+        "%s-%s-%s" % (slug, version, rom_sha1[:12])
     )
 
 
-def _clone_at_commit(
+def _clone_at_version(
     repository: str,
-    branch: str,
-    commit: str,
+    version: str,
     rom_sha1: str,
     output: Callable[[str], None],
-) -> Path:
+) -> Tuple[Path, str]:
     repository = validate_repository(repository)
-    if not re.fullmatch(r"[0-9a-f]{40}", commit.lower()):
-        raise ValueError("Selected commit must be a full Git SHA.")
+    if not re.fullmatch(
+        r"v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?",
+        version,
+    ):
+        raise ValueError("Selected source version must use a semantic version tag.")
     source_url = "https://github.com/%s.git" % repository
-    target = _build_directory(repository, commit, rom_sha1)
+    target = _build_directory(repository, version, rom_sha1)
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
-        output("Removing the incomplete build cache for this source/ROM pair.")
+        output("Removing the previous build workspace for this version/ROM pair.")
         shutil.rmtree(target)
 
-    output("Cloning %s, branch %s." % (repository, branch))
+    output("Cloning %s, source version %s." % (repository, version))
     run(
         [
             "git",
             "clone",
-            "--no-checkout",
             "--depth",
             "1",
             "--single-branch",
             "--branch",
-            branch,
+            version,
             source_url,
             str(target),
         ],
         output=output,
     )
-    run(["git", "fetch", "--depth", "1", "origin", commit], cwd=target, output=output)
-    run(["git", "checkout", "--detach", commit], cwd=target, output=output)
     resolved = capture(["git", "rev-parse", "HEAD"], cwd=target)
-    if resolved.lower() != commit.lower():
-        raise BuildError("Git checked out %s instead of selected %s." % (resolved, commit))
-    return target
+    if not re.fullmatch(r"[0-9a-f]{40}", resolved.lower()):
+        raise BuildError("Git returned an invalid source commit for %s." % version)
+    output("Pinned source version %s to commit %s." % (version, resolved.lower()))
+    return target, resolved.lower()
 
 
 def build_deb(
     repository: str,
-    branch: str,
-    commit: str,
+    version: str,
     rom: RomValidation,
     jobs: int,
     output: Callable[[str], None],
@@ -99,7 +99,7 @@ def build_deb(
     if not sdk.is_dir() or not clang.is_file():
         raise BuildError("Run the Theos setup and smoke test before compiling.")
 
-    root = _clone_at_commit(repository, branch, commit, rom.sha1, output)
+    root, commit = _clone_at_version(repository, version, rom.sha1, output)
     if not (root / "src" / "ios" / "Makefile.ios").is_file():
         raise BuildError("Selected commit does not contain src/ios/Makefile.ios.")
     if not (root / "extract_assets.py").is_file() or not (root / "assets.json").is_file():
@@ -143,17 +143,17 @@ def build_deb(
     package_dir = app_data_dir() / "packages"
     output_path = package_dir / (
         "sm64_%s+%s_%s.deb"
-        % (PACKAGE_NAME, commit[:8], PACKAGE_ARCHITECTURE)
+        % (PACKAGE_NAME, version, PACKAGE_ARCHITECTURE)
     )
     output("Creating local package %s." % output_path)
     package = create_deb(
         app_bundle=app_bundle,
         output_path=output_path,
         package=PACKAGE_NAME,
-        version="1.0+" + commit[:8],
+        version=version.removeprefix("v").replace("-", "~") + "+" + commit[:8],
         architecture=PACKAGE_ARCHITECTURE,
         minimum_ios=PACKAGE_MIN_IOS,
     )
     run(["dpkg-deb", "--info", str(package)], output=output)
     output("Build complete: %s" % package)
-    return BuildResult(commit, rom.sha1, package)
+    return BuildResult(version, commit, rom.sha1, package)

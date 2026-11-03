@@ -13,11 +13,8 @@ from .config import (
     theos_dir,
 )
 from .github import (
-    Commit,
     GitHubError,
-    describe_commit,
-    list_branches,
-    list_ios_commits,
+    list_source_releases,
     validate_repository,
 )
 from .roms import RomValidation, validate_rom
@@ -29,7 +26,7 @@ SETUP_MARKER = "setup-verified.json"
 
 MAIN_ACTIONS = (
     "Set up iOS Compiler (Theos)",
-    "Choose Commit",
+    "Choose iOS Version",
     "Validate your US ROM",
     "Build Game",
     "Exit",
@@ -115,7 +112,7 @@ def _curses_menu(screen, title: str, options, selected: int, status_lines=()):
 
         inner_width = width - 4
         _safe_addstr(screen, 0, 1, "+" + "-" * (width - 3), heading)
-        _safe_addstr(screen, 1, 2, "SM64 iOS BUILDER by John Mama. - Compiles the game for iOS 6.1.X+", heading)
+        _safe_addstr(screen, 1, 2, "SM64 iOS BUILDER by John Mama. - Compiles the game for iOS 6+", heading)
         _safe_addstr(screen, 2, 1, "+" + "-" * (width - 3), heading)
         _safe_addstr(screen, 3, 2, title[:inner_width], heading)
 
@@ -238,52 +235,49 @@ def _select_option_fallback(title: str, options, selected: int) -> Optional[int]
         print("Choose a listed number or q to cancel.")
 
 
-def _choose_commit(state: Dict) -> None:
+def _choose_version(state: Dict) -> None:
     repository = validate_repository(
-        input("[OPTIONAL] Enter a GitHub source repository, it is advised not to enter anything here unless you are using a modified repo Leave it empty to pull from my default iOS 6 compatible repo [%s]: " % state.get("repository", DEFAULT_REPOSITORY))
+        input(
+            "[OPTIONAL] GitHub source repository [%s]: "
+            % state.get("repository", DEFAULT_REPOSITORY)
+        )
         or state.get("repository", DEFAULT_REPOSITORY)
     )
-    print("Loading branches from https://github.com/%s ..." % repository)
-    branches = list_branches(repository)
-    if not branches:
-        raise GitHubError("The selected repository has no branches.")
-
-    prior_branch = state.get("branch")
-    default_branch = prior_branch if prior_branch in branches else branches[0]
-    branch_options = [
-        branch + ("  · saved" if branch == prior_branch else "")
-        for branch in branches
-    ]
-    branch_index = _select_option(
-        "Choose a source branch", branch_options, branches.index(default_branch)
+    print(
+        "Loading published source versions from https://github.com/%s ..."
+        % repository
     )
-    if branch_index is None:
-        return
-    branch = branches[branch_index]
-
-    print("Loading iOS commits for %s ..." % branch)
-    commits = list_ios_commits(repository, branch)
-    if not commits:
+    releases = list_source_releases(repository)
+    if not releases:
         raise GitHubError(
-            "No commits touching src/ios were found on %s. "
-            ""
-            % branch
+            "No published releases were found for %s. "
+            "The source repository must publish versioned GitHub releases."
+            % repository
         )
-    commit_options = [
-        "%s  %s  %s" % (commit.short_sha, commit.date[:10], commit.message)
-        for commit in commits
+    version_options = [
+        "%s  %s  %s"
+        % (release.tag, release.published_at[:10], release.title)
+        for release in releases
     ]
-    commit_index = _select_option("Choose an iOS source commit", commit_options)
-    if commit_index is None:
+    version_index = _select_option(
+        "Choose a published iOS version", version_options
+    )
+    if version_index is None:
         return
-    selected = commits[commit_index]
+    selected = releases[version_index]
 
     state["repository"] = repository
-    state["branch"] = branch
-    state["commit"] = selected.sha
-    print("\n" + describe_commit(repository, selected.sha))
+    state["source_version"] = selected.tag
+    state.pop("branch", None)
+    state.pop("commit", None)
+    print("\n%s" % selected.title)
+    print("Version tag: %s" % selected.tag)
+    if selected.body:
+        print(selected.body[:4000])
+    if selected.url:
+        print("\nRelease notes: %s" % selected.url)
     _save_state(state)
-    print("\nSelected %s at %s." % (selected.short_sha, branch))
+    print("\nSelected source version %s." % selected.tag)
 
 
 def _choose_rom(state: Dict) -> Optional[RomValidation]:
@@ -347,8 +341,8 @@ def _is_setup_verified() -> bool:
 def _compile(state: Dict) -> None:
     if not _is_setup_verified():
         raise SetupError("Run setup and pass the Theos smoke test before compiling.")
-    if not all(state.get(key) for key in ("repository", "branch", "commit")):
-        raise ValueError("Select a published iOS source commit first.")
+    if not all(state.get(key) for key in ("repository", "source_version")):
+        raise ValueError("Select a published iOS source version first.")
     rom = _saved_rom(state)
     if rom is None or not rom.supported:
         raise ValueError("Select and validate a supported US .z64 ROM first.")
@@ -378,8 +372,7 @@ def _compile(state: Dict) -> None:
 
     result = build_deb(
         repository=state["repository"],
-        branch=state["branch"],
-        commit=state["commit"],
+        version=state["source_version"],
         rom=rom,
         jobs=jobs,
         output=print,
@@ -396,18 +389,17 @@ def run_cli() -> int:
         return 1
 
     while True:
-        selected_commit = state.get("commit")
+        selected_version = state.get("source_version")
         selected_action = 0
         if not sys.stdin.isatty():
             print(
                 "\nSM64 iOS Builder — WSL console\n"
-                "  Setup: %s | Source: %s @ %s | ROM: %s | Commit: %s"
+                "  Setup: %s | Source: %s | ROM: %s | Version: %s"
                 % (
                     "ready" if _is_setup_verified() else "needs setup",
                     state.get("repository", "(not selected)"),
-                    state.get("branch", "(not selected)"),
                     state.get("rom_path", "(not selected)"),
-                    selected_commit[:8] if selected_commit else "(not selected)",
+                    selected_version or "(not selected)",
                 )
             )
             try:
@@ -424,13 +416,8 @@ def run_cli() -> int:
             status_lines = (
                 "Theos / iOS SDK: %s"
                 % ("Already Installed" if _is_setup_verified() else "NEEDS SETUP"),
-                "Source: %s / %s"
-                % (
-                    state.get("repository", DEFAULT_REPOSITORY),
-                    state.get("branch") or "branch not selected",
-                ),
-                "Commit: %s"
-                % (selected_commit[:8] if selected_commit else "not selected"),
+                "Source: %s" % state.get("repository", DEFAULT_REPOSITORY),
+                "iOS version: %s" % (selected_version or "not selected"),
                 "ROM: %s" % (state.get("rom_path") or "not selected"),
             )
             selected_action = curses.wrapper(
@@ -446,7 +433,7 @@ def run_cli() -> int:
             if selected_action == 0:
                 _setup(print)
             elif selected_action == 1:
-                _choose_commit(state)
+                _choose_version(state)
             elif selected_action == 2:
                 _choose_rom(state)
             elif selected_action == 3:

@@ -2,10 +2,9 @@ import json
 import os
 import re
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import List
 
 
 _REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -13,15 +12,16 @@ _API_ROOT = "https://api.github.com"
 
 
 @dataclass(frozen=True)
-class Commit:
-    sha: str
-    message: str
-    author: str
-    date: str
+class SourceRelease:
+    tag: str
+    name: str
+    body: str
+    published_at: str
+    url: str
 
     @property
-    def short_sha(self) -> str:
-        return self.sha[:8]
+    def title(self) -> str:
+        return self.name or self.tag
 
 
 class GitHubError(RuntimeError):
@@ -56,62 +56,23 @@ def _request_json(url: str):
         raise GitHubError("Cannot reach GitHub: %s" % error.reason) from error
 
 
-def list_branches(repository: str) -> List[str]:
+def list_source_releases(repository: str) -> List[SourceRelease]:
     repository = validate_repository(repository)
-    url = "%s/repos/%s/branches?per_page=100" % (_API_ROOT, repository)
-    branches = _request_json(url)
-    if not isinstance(branches, list):
-        raise GitHubError("Unexpected branch list returned by GitHub.")
-    return [entry["name"] for entry in branches if "name" in entry]
-
-
-def list_ios_commits(repository: str, branch: str) -> List[Commit]:
-    repository = validate_repository(repository)
-    query = urllib.parse.urlencode(
-        {"sha": branch, "path": "src/ios", "per_page": 100}
-    )
-    url = "%s/repos/%s/commits?%s" % (_API_ROOT, repository, query)
+    url = "%s/repos/%s/releases?per_page=100" % (_API_ROOT, repository)
     records = _request_json(url)
     if not isinstance(records, list):
-        raise GitHubError("Unexpected commit list returned by GitHub.")
-    commits = []
+        raise GitHubError("Unexpected release list returned by GitHub.")
+    releases = []
     for record in records:
-        commit = record.get("commit", {})
-        author = commit.get("author") or {}
-        message_lines = commit.get("message", "").splitlines()
-        commits.append(
-            Commit(
-                sha=record["sha"],
-                message=message_lines[0] if message_lines else "(no commit message)",
-                author=author.get("name", "Unknown"),
-                date=author.get("date", ""),
+        tag = record.get("tag_name")
+        if tag and not record.get("draft", False):
+            releases.append(
+                SourceRelease(
+                    tag=tag,
+                    name=record.get("name") or "",
+                    body=record.get("body") or "",
+                    published_at=record.get("published_at") or "",
+                    url=record.get("html_url") or "",
+                )
             )
-        )
-    return commits
-
-
-def describe_commit(repository: str, sha: str) -> str:
-    repository = validate_repository(repository)
-    url = "%s/repos/%s/commits/%s" % (
-        _API_ROOT,
-        repository,
-        urllib.parse.quote(sha, safe=""),
-    )
-    record: Dict = _request_json(url)
-    commit = record.get("commit", {})
-    message = commit.get("message", "(no commit message)")
-    files = record.get("files", [])
-    output = [message, "", "Changed files:"]
-    for item in files:
-        output.append(
-            "  %s  %s" % (item.get("status", "modified"), item.get("filename", ""))
-        )
-        patch = item.get("patch")
-        if patch:
-            lines = patch.splitlines()
-            output.extend("    " + line for line in lines[:12])
-            if len(lines) > 12:
-                output.append("    ...")
-    if not files:
-        output.append("  (GitHub did not include file details.)")
-    return "\n".join(output)
+    return releases
