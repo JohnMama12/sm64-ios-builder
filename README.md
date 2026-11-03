@@ -1,6 +1,6 @@
 # SM64 iOS Builder
 
-A Python console tool that runs in Linux or WSL, for compiling Super Mario 64 On Legacy iOS devices
+A Python console tool that runs in Linux or WSL, for compiling Super Mario 64 On Legacy iOS devices (iOS6+)
 
 
 ## Requirements
@@ -33,10 +33,12 @@ python3 app.py --validate-rom "/mnt/c/Users/you/ROMs/baserom.us.z64"
    minimal armv7 Theos `.deb` as a preflight test. Setup is marked complete
    only after that test succeeds. The selected SDK is iOS 6.1; the app's
    minimum deployment target remains iOS 6.0.
+
 2. Select the source repository (defaults to `JohnMama12/sm64`) and branch,
    then choose an iOS commit.
    The list is pinned to commit SHAs that touch `src/ios`; selecting one shows
    its message, changed files, and patch summary.
+
 3. Select an authentic, legally obtained, big-endian `.z64` ROM. The only
    end-to-end supported version is US (NTSC-U), SHA-1
    `9bef1128717f958171a4afac3ed78ee2bb4e86ce`. JP, EU, and Shindou hashes are
@@ -44,6 +46,7 @@ python3 app.py --validate-rom "/mnt/c/Users/you/ROMs/baserom.us.z64"
    If on windows You can paste a Windows drive path such as
    `C:\Users\you\Downloads\baserom.us.z64`; the builder converts it to the
    corresponding WSL `/mnt/c/...` path.
+
 4. Confirm you own the ROM and acknowledge the binary distribution restriction.
    The builder checks out the selected commit, runs `make assets VERSION=us`
    to use that source revision's existing Python extraction/build pipeline,
