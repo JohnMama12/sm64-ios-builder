@@ -1,36 +1,7 @@
-import gzip
-import os
-import tarfile
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
-from typing import Iterable, Tuple
-
-
-def _tar_gzip(output: Path, members: Iterable[Tuple[Path, str]]) -> None:
-    with output.open("wb") as raw:
-        with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as compressed:
-            with tarfile.open(fileobj=compressed, mode="w|") as archive:
-                for source, archive_name in members:
-                    archive.add(str(source), arcname=archive_name, recursive=True)
-
-
-def _write_ar_member(output, name: str, content_path: Path) -> None:
-    size = content_path.stat().st_size
-    header = (
-        "%-16s%-12d%-6d%-6d%-8o%-10d`\n"
-        % (name, 0, 0, 0, 0o100644, size)
-    ).encode("ascii")
-    if len(header) != 60:
-        raise ValueError("Invalid ar member header for %s." % name)
-    output.write(header)
-    with content_path.open("rb") as content:
-        while True:
-            chunk = content.read(1024 * 1024)
-            if not chunk:
-                break
-            output.write(chunk)
-    if size % 2:
-        output.write(b"\n")
 
 
 def create_deb(
@@ -49,6 +20,8 @@ def create_deb(
         raise ValueError("App bundle has no Info.plist.")
     if not any(path.is_file() for path in app_bundle.iterdir()):
         raise ValueError("App bundle is empty.")
+    if shutil.which("dpkg-deb") is None:
+        raise RuntimeError("dpkg-deb is required to create a device-installable package.")
 
     control = (
         "Package: %s\n"
@@ -64,26 +37,40 @@ def create_deb(
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="sm64-deb-") as temp_dir:
+    with tempfile.TemporaryDirectory(
+        prefix=".sm64-deb-", dir=str(output_path.parent)
+    ) as temp_dir:
         temp = Path(temp_dir)
-        debian_binary = temp / "debian-binary"
-        debian_binary.write_text("2.0\n", encoding="ascii")
-
-        control_dir = temp / "control"
+        package_root = temp / "root"
+        package_root.mkdir()
+        control_dir = package_root / "DEBIAN"
         control_dir.mkdir()
         (control_dir / "control").write_text(control, encoding="utf-8")
-        control_tar = temp / "control.tar.gz"
-        _tar_gzip(control_tar, [(control_dir / "control", "./control")])
 
-        data_tar = temp / "data.tar.gz"
-        _tar_gzip(data_tar, [(app_bundle, "Applications/SM64.app")])
+        app_destination = package_root / "Applications" / "SM64.app"
+        app_destination.parent.mkdir(parents=True)
+        shutil.copytree(app_bundle, app_destination, copy_function=shutil.copy2)
 
-        with output_path.open("wb") as output:
-            output.write(b"!<arch>\n")
-            for name, member in (
-                ("debian-binary", debian_binary),
-                ("control.tar.gz", control_tar),
-                ("data.tar.gz", data_tar),
-            ):
-                _write_ar_member(output, name + "/", member)
+        temporary_package = temp / output_path.name
+        result = subprocess.run(
+            [
+                "dpkg-deb",
+                "--build",
+                "--root-owner-group",
+                "--deb-format=2.0",
+                "--compression=gzip",
+                "--compression-level=9",
+                str(package_root),
+                str(temporary_package),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode:
+            details = (result.stdout + result.stderr).strip()
+            raise RuntimeError(
+                "dpkg-deb failed to create the iOS package: %s" % details
+            )
+        temporary_package.replace(output_path)
     return output_path

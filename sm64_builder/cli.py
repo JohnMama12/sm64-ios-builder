@@ -28,10 +28,10 @@ STATE_FILE = "state.json"
 SETUP_MARKER = "setup-verified.json"
 
 MAIN_ACTIONS = (
-    "Set up Theos + iOS 6.1 SDK",
-    "Choose GitHub source branch and commit",
+    "Set up iOS Compiler (Theos)",
+    "Choose Commit",
     "Validate your US ROM",
-    "Build local-only .deb",
+    "Build Game",
     "Exit",
 )
 
@@ -115,7 +115,7 @@ def _curses_menu(screen, title: str, options, selected: int, status_lines=()):
 
         inner_width = width - 4
         _safe_addstr(screen, 0, 1, "+" + "-" * (width - 3), heading)
-        _safe_addstr(screen, 1, 2, "SM64 iOS BUILDER", heading)
+        _safe_addstr(screen, 1, 2, "SM64 iOS BUILDER by John Mama. - Compiles the game for iOS 6.1.X+", heading)
         _safe_addstr(screen, 2, 1, "+" + "-" * (width - 3), heading)
         _safe_addstr(screen, 3, 2, title[:inner_width], heading)
 
@@ -240,7 +240,7 @@ def _select_option_fallback(title: str, options, selected: int) -> Optional[int]
 
 def _choose_commit(state: Dict) -> None:
     repository = validate_repository(
-        input("GitHub source repository [%s]: " % state.get("repository", DEFAULT_REPOSITORY))
+        input("[OPTIONAL] Enter a GitHub source repository, it is advised not to enter anything here unless you are using a modified repo Leave it empty to pull from my default iOS 6 compatible repo [%s]: " % state.get("repository", DEFAULT_REPOSITORY))
         or state.get("repository", DEFAULT_REPOSITORY)
     )
     print("Loading branches from https://github.com/%s ..." % repository)
@@ -265,8 +265,8 @@ def _choose_commit(state: Dict) -> None:
     commits = list_ios_commits(repository, branch)
     if not commits:
         raise GitHubError(
-            "No commits touching src/ios were found on %s. Push the iOS source "
-            "branch to GitHub first, or select its published repository/branch."
+            "No commits touching src/ios were found on %s. "
+            ""
             % branch
         )
     commit_options = [
@@ -288,7 +288,7 @@ def _choose_commit(state: Dict) -> None:
 
 def _choose_rom(state: Dict) -> Optional[RomValidation]:
     previous_path = state.get("rom_path", "")
-    path = input("Path to your authentic US .z64 ROM [%s]: " % previous_path).strip()
+    path = input("Path to your authentic .z64 ROM. [%s]: " % previous_path).strip()
     if not path:
         path = previous_path
     if not path:
@@ -356,20 +356,19 @@ def _compile(state: Dict) -> None:
     print(
         "\nROM/license notice: you must own a legally obtained US Super Mario 64 ROM."
     )
-    if input("Confirm that you own/use this ROM? [y/N]: ").strip().lower() != "y":
+    if input("Confirm that you own this ROM? [y/N]: ").strip().lower() != "y":
         print("Build cancelled.")
         return
     print(
-        "\nLOCAL-ONLY BUILD: src/pc/gfx/LICENSE.txt allows source redistribution "
-        "only and forbids binary redistribution. Do not upload or distribute "
-        "the generated .deb unless that code is replaced or separately relicensed."
+        "\n SM64-iOS forbids binary redistribution due to upstream licensing. You are forbidden to upload or redistribute "
+        "the generated .deb."
     )
-    if input("Continue with a local-only .deb? [y/N]: ").strip().lower() != "y":
-        print("Build cancelled.")
+    if input("Enter y to agree with this policy.").strip().lower() != "y":
+        print("Sorry :(, Build cancelled!")
         return
 
     default_jobs = max(1, os.cpu_count() or 1)
-    answer = input("Parallel build jobs [%d]: " % default_jobs).strip()
+    answer = input("[OPTIONAL] Parallel build jobs [%d]: " % default_jobs).strip()
     try:
         jobs = int(answer) if answer else default_jobs
     except ValueError as error:
@@ -424,7 +423,7 @@ def run_cli() -> int:
         else:
             status_lines = (
                 "Theos / iOS SDK: %s"
-                % ("READY" if _is_setup_verified() else "NEEDS SETUP"),
+                % ("Already Installed" if _is_setup_verified() else "NEEDS SETUP"),
                 "Source: %s / %s"
                 % (
                     state.get("repository", DEFAULT_REPOSITORY),
