@@ -54,10 +54,15 @@ The extraction step runs only in the WSL build workspace. It generates the C
 and data inputs required by the iOS compiler; the Windows PC game executable
 is never built, and the ROM is not put in the `.deb`.
 
-The public `n64decomp/sm64` `master` branch currently has no commits touching
-`src/ios`. Publish the iOS source branch (or point the CLI at a repository where
-it is published) before selecting a build. A full app build also requires the
-user to supply the supported ROM; the builder never downloads one.
+The default source is `JohnMama12/sm64`, branch
+`johnmama12-ios-app-publishing`. You can choose a different public GitHub
+repository and branch from the CLI. A full app build also requires the user to
+supply the supported ROM; the builder never downloads one.
+
+The interactive terminal menu supports arrow keys and Enter, with number
+shortcuts. Branches and commits use the same keyboard selector; `q` cancels a
+selection or exits the main menu. When run without an interactive terminal,
+the menu falls back to numbered prompts.
 
 ## Reproducibility
 

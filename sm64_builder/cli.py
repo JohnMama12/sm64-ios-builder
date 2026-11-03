@@ -1,6 +1,8 @@
 import json
 import os
+import shutil
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -25,6 +27,14 @@ from .setup import SetupError, setup_theos
 
 STATE_FILE = "state.json"
 SETUP_MARKER = "setup-verified.json"
+
+MAIN_ACTIONS = (
+    "Set up Theos + iOS 6.1 SDK",
+    "Choose GitHub source branch and commit",
+    "Validate your US ROM",
+    "Build local-only .deb",
+    "Exit",
+)
 
 
 def _state_path() -> Path:
@@ -53,11 +63,176 @@ def _save_state(state: Dict) -> None:
     temporary.replace(path)
 
 
-def _print_commit(index: int, commit: Commit) -> None:
-    print(
-        "%3d. %s  %s  %s"
-        % (index, commit.short_sha, commit.date[:10], commit.message)
+def _terminal_colors_enabled() -> bool:
+    return (
+        sys.stdout.isatty()
+        and os.environ.get("TERM", "") != "dumb"
+        and "NO_COLOR" not in os.environ
     )
+
+
+def _paint(text: str, *styles: str) -> str:
+    if not styles or not _terminal_colors_enabled():
+        return text
+    return "\033[%sm%s\033[0m" % (";".join(styles), text)
+
+
+def _clip(text: str, width: int) -> str:
+    text = str(text)
+    if len(text) <= width:
+        return text
+    if width < 4:
+        return text[:width]
+    return text[: width - 3] + "..."
+
+
+def _draw_dashboard(state: Dict, selected: int) -> None:
+    width = max(58, min(shutil.get_terminal_size((80, 24)).columns, 92))
+    inner = width - 4
+    setup_ready = _is_setup_verified()
+    setup_label = "READY" if setup_ready else "NEEDS SETUP"
+    setup_style = "32" if setup_ready else "33"
+    repository = _clip(state.get("repository", DEFAULT_REPOSITORY), 28)
+    branch = _clip(state.get("branch") or "not selected", 28)
+    rom_path = _clip(state.get("rom_path") or "not selected", inner - 15)
+    commit = state.get("commit")
+    commit_label = commit[:8] if commit else "not selected"
+
+    def row(label: str) -> str:
+        return "  " + label.ljust(inner - 2) + "  "
+
+    top = "╭" + "─" * (width - 2) + "╮"
+    divider = "├" + "─" * (width - 2) + "┤"
+    bottom = "╰" + "─" * (width - 2) + "╯"
+    print("\033[2J\033[H", end="" if _terminal_colors_enabled() else "\n")
+    print(_paint(top, "36", "1"))
+    print("│" + _paint(row("SM64 iOS BUILDER"), "1", "36") + "│")
+    print("│" + _paint(row("WSL build workspace · armv7 · iOS 6.0+"), "2") + "│")
+    print(divider)
+    print(
+        "│"
+        + _paint(row("TOOLCHAIN  " + setup_label), "1", setup_style)
+        + "│"
+    )
+    print("│" + row("SOURCE     " + repository + "  /  " + branch) + "│")
+    print("│" + row("COMMIT     " + commit_label) + "│")
+    print("│" + row("ROM        " + rom_path) + "│")
+    print(divider)
+    print("│" + _paint(row("ACTIONS  ·  ↑/↓ move  Enter select  1–5 shortcut"), "2") + "│")
+    for index, action in enumerate(MAIN_ACTIONS):
+        label = "  [%d]  %s" % (index + 1, action)
+        if index == selected:
+            label = "  › " + _clip(label[2:], inner - 4)
+            print("│" + _paint(row(label), "30", "46", "1") + "│")
+        else:
+            print("│" + row(label) + "│")
+    print(_paint(bottom, "36", "1"))
+
+
+def _draw_choices(title: str, options, selected: int, first_visible: int) -> None:
+    width = max(58, min(shutil.get_terminal_size((80, 24)).columns, 92))
+    inner = width - 4
+    top = "╭" + "─" * (width - 2) + "╮"
+    divider = "├" + "─" * (width - 2) + "┤"
+    bottom = "╰" + "─" * (width - 2) + "╯"
+    visible_count = max(4, min(12, shutil.get_terminal_size((80, 24)).lines - 9))
+    print("\033[2J\033[H", end="" if _terminal_colors_enabled() else "\n")
+    print(_paint(top, "36", "1"))
+    print("│" + _paint(("  " + _clip(title, inner - 2)).ljust(inner + 2), "1", "36") + "│")
+    print(divider)
+    last_visible = min(len(options), first_visible + visible_count)
+    for index in range(first_visible, last_visible):
+        label = "  [%d]  %s" % (index + 1, options[index])
+        label = _clip(label, inner)
+        if index == selected:
+            label = "  › " + _clip(label[2:], inner - 4)
+            print("│" + _paint(("  " + label).ljust(inner + 2), "30", "46", "1") + "│")
+        else:
+            print("│" + ("  " + label).ljust(inner + 2) + "│")
+    for _ in range(visible_count - (last_visible - first_visible)):
+        print("│" + " " * (inner + 2) + "│")
+    print(divider)
+    print("│" + _paint(("  ↑/↓ move  Enter select  1–9 jump  q cancel").ljust(inner + 2), "2") + "│")
+    print(_paint(bottom, "36", "1"))
+
+
+@contextmanager
+def _terminal_keys():
+    import termios
+    import tty
+
+    descriptor = sys.stdin.fileno()
+    previous = termios.tcgetattr(descriptor)
+    try:
+        tty.setraw(descriptor)
+        yield
+    finally:
+        termios.tcsetattr(descriptor, termios.TCSADRAIN, previous)
+
+
+def _read_key() -> str:
+    import select
+
+    descriptor = sys.stdin.fileno()
+    key = os.read(descriptor, 1).decode("ascii", errors="ignore")
+    if key == "\x1b":
+        if select.select([descriptor], [], [], 0.05)[0]:
+            key += os.read(descriptor, 1).decode("ascii", errors="ignore")
+            if key == "\x1b[" and select.select([descriptor], [], [], 0.05)[0]:
+                key += os.read(descriptor, 1).decode("ascii", errors="ignore")
+    return key
+
+
+def _select_option(title: str, options, default_index: int = 0) -> Optional[int]:
+    if not options:
+        return None
+    selected = min(max(default_index, 0), len(options) - 1)
+    if not sys.stdin.isatty():
+        print("\n%s" % title)
+        for index, option in enumerate(options, 1):
+            print("%3d. %s" % (index, option))
+        while True:
+            try:
+                answer = input(
+                    "Choose a number [%d], or q to cancel: " % (selected + 1)
+                ).strip().lower()
+            except EOFError:
+                return None
+            if answer == "q":
+                return None
+            if not answer:
+                return selected
+            try:
+                choice = int(answer) - 1
+            except ValueError:
+                print("Enter a listed number or q to cancel.")
+                continue
+            if 0 <= choice < len(options):
+                return choice
+            print("Choose a listed number or q to cancel.")
+
+    visible_count = max(4, min(12, shutil.get_terminal_size((80, 24)).lines - 9))
+    first_visible = max(0, min(selected - visible_count + 1, len(options) - visible_count))
+    first_visible = max(0, first_visible)
+    with _terminal_keys():
+        while True:
+            _draw_choices(title, options, selected, first_visible)
+            key = _read_key()
+            if key in ("\r", "\n"):
+                return selected
+            if key in ("q", "Q", "\x03", "\x1b"):
+                return None
+            if key in ("\x1b[A", "k"):
+                selected = (selected - 1) % len(options)
+            elif key in ("\x1b[B", "j"):
+                selected = (selected + 1) % len(options)
+            elif key.isdigit() and key != "0":
+                choice = int(key) - 1
+                if choice < len(options):
+                    return choice
+            first_visible = max(
+                0, min(selected - visible_count + 1, len(options) - visible_count)
+            )
 
 
 def _choose_commit(state: Dict) -> None:
@@ -72,20 +247,16 @@ def _choose_commit(state: Dict) -> None:
 
     prior_branch = state.get("branch")
     default_branch = prior_branch if prior_branch in branches else branches[0]
-    for index, branch in enumerate(branches, 1):
-        print("%3d. %s%s" % (
-            index,
-            branch,
-            " (saved)" if branch == prior_branch else "",
-        ))
-    answer = input("Choose branch number [%s]: " % default_branch).strip()
-    if not answer:
-        branch = default_branch
-    else:
-        try:
-            branch = branches[int(answer) - 1]
-        except (ValueError, IndexError) as error:
-            raise ValueError("Choose a listed branch number.") from error
+    branch_options = [
+        branch + ("  · saved" if branch == prior_branch else "")
+        for branch in branches
+    ]
+    branch_index = _select_option(
+        "Choose a source branch", branch_options, branches.index(default_branch)
+    )
+    if branch_index is None:
+        return
+    branch = branches[branch_index]
 
     print("Loading iOS commits for %s ..." % branch)
     commits = list_ios_commits(repository, branch)
@@ -95,14 +266,14 @@ def _choose_commit(state: Dict) -> None:
             "branch to GitHub first, or select its published repository/branch."
             % branch
         )
-    for index, commit in enumerate(commits, 1):
-        _print_commit(index, commit)
-
-    answer = input("Choose the exact source commit [1]: ").strip() or "1"
-    try:
-        selected = commits[int(answer) - 1]
-    except (ValueError, IndexError) as error:
-        raise ValueError("Choose a listed commit number.") from error
+    commit_options = [
+        "%s  %s  %s" % (commit.short_sha, commit.date[:10], commit.message)
+        for commit in commits
+    ]
+    commit_index = _select_option("Choose an iOS source commit", commit_options)
+    if commit_index is None:
+        return
+    selected = commits[commit_index]
 
     state["repository"] = repository
     state["branch"] = branch
@@ -223,42 +394,58 @@ def run_cli() -> int:
         return 1
 
     while True:
-        setup_status = "passed" if _is_setup_verified() else "not run"
         selected_commit = state.get("commit")
-        commit_display = selected_commit[:8] if selected_commit else "(not selected)"
-        print(
-            "\nSM64 iOS Builder — WSL console\n"
-            "  Setup: %s | Source: %s @ %s | ROM: %s | Commit: %s\n"
-            "  1. Set up Theos + iOS 6.1 SDK and run compiler test\n"
-            "  2. Choose GitHub source branch and iOS commit\n"
-            "  3. Validate an authentic ROM\n"
-            "  4. Compile local-only .deb\n"
-            "  5. Exit"
-            % (
-                setup_status,
-                state.get("repository", "(not selected)"),
-                state.get("branch", "(not selected)"),
-                state.get("rom_path", "(not selected)"),
-                commit_display,
+        selected_action = 0
+        if not sys.stdin.isatty():
+            print(
+                "\nSM64 iOS Builder — WSL console\n"
+                "  Setup: %s | Source: %s @ %s | ROM: %s | Commit: %s"
+                % (
+                    "ready" if _is_setup_verified() else "needs setup",
+                    state.get("repository", "(not selected)"),
+                    state.get("branch", "(not selected)"),
+                    state.get("rom_path", "(not selected)"),
+                    selected_commit[:8] if selected_commit else "(not selected)",
+                )
             )
-        )
-        try:
-            choice = input("Select an action: ").strip()
-        except EOFError:
-            return 0
-        try:
-            if choice == "1":
-                _setup(print)
-            elif choice == "2":
-                _choose_commit(state)
-            elif choice == "3":
-                _choose_rom(state)
-            elif choice == "4":
-                _compile(state)
-            elif choice == "5":
+            try:
+                choice = input("Select 1–5 (or q to exit): ").strip().lower()
+            except EOFError:
                 return 0
-            else:
-                print("Choose 1, 2, 3, 4, or 5.")
+            if choice in ("q", "quit", "exit"):
+                return 0
+            if not choice.isdigit() or not 1 <= int(choice) <= len(MAIN_ACTIONS):
+                print("Choose a listed action.")
+                continue
+            selected_action = int(choice) - 1
+        else:
+            with _terminal_keys():
+                while True:
+                    _draw_dashboard(state, selected_action)
+                    key = _read_key()
+                    if key in ("\r", "\n"):
+                        break
+                    if key in ("q", "Q", "\x03"):
+                        return 0
+                    if key in ("\x1b[A", "k"):
+                        selected_action = (selected_action - 1) % len(MAIN_ACTIONS)
+                    elif key in ("\x1b[B", "j"):
+                        selected_action = (selected_action + 1) % len(MAIN_ACTIONS)
+                    elif key.isdigit() and key != "0":
+                        selected_action = int(key) - 1
+                        if selected_action < len(MAIN_ACTIONS):
+                            break
+        try:
+            if selected_action == 0:
+                _setup(print)
+            elif selected_action == 1:
+                _choose_commit(state)
+            elif selected_action == 2:
+                _choose_rom(state)
+            elif selected_action == 3:
+                _compile(state)
+            elif selected_action == 4:
+                return 0
         except (GitHubError, SetupError, OSError, ValueError, RuntimeError) as error:
             print("ERROR: %s" % error, file=sys.stderr)
         except EOFError:
