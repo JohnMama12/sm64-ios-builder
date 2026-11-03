@@ -1,13 +1,35 @@
 import hashlib
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from sm64_builder.roms import RomValidation, sha1_file, validate_rom
+from sm64_builder.roms import (
+    RomValidation,
+    normalize_rom_path,
+    sha1_file,
+    validate_rom,
+)
 
 
 class RomValidationTests(unittest.TestCase):
+    def test_normalizes_windows_drive_path_for_wsl(self):
+        if os.name == "nt":
+            self.skipTest("Windows paths are native on Windows.")
+        self.assertEqual(
+            normalize_rom_path(r"C:\Users\MW\Downloads\baserom.us.z64"),
+            Path("/mnt/c/Users/MW/Downloads/baserom.us.z64"),
+        )
+
+    def test_normalizes_quoted_mixed_separator_path_for_wsl(self):
+        if os.name == "nt":
+            self.skipTest("Windows paths are native on Windows.")
+        self.assertEqual(
+            normalize_rom_path('"C:/Users/MW/Downloads\\baserom.us.z64"'),
+            Path("/mnt/c/Users/MW/Downloads/baserom.us.z64"),
+        )
+
     def test_hash_streams_file(self):
         content = b"rom-data"
         with tempfile.TemporaryDirectory() as temp_dir:

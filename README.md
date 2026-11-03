@@ -44,6 +44,9 @@ python3 app.py --validate-rom "/mnt/c/Users/you/ROMs/baserom.us.z64"
    end-to-end supported version is US (NTSC-U), SHA-1
    `9bef1128717f958171a4afac3ed78ee2bb4e86ce`. JP, EU, and Shindou hashes are
    recognized for clear diagnostics but are not supported by this iOS build.
+   You can paste a Windows drive path such as
+   `C:\Users\you\Downloads\baserom.us.z64`; the builder converts it to the
+   corresponding WSL `/mnt/c/...` path.
 4. Confirm you own the ROM and acknowledge the local-only binary restriction.
    The builder checks out the selected commit, runs `make assets VERSION=us`
    to use that source revision's existing Python extraction/build pipeline,

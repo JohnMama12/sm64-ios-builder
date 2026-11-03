@@ -1,9 +1,14 @@
 import hashlib
+import os
+import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Optional
 
 from .config import KNOWN_ROMS
+
+
+_WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 @dataclass(frozen=True)
@@ -31,8 +36,21 @@ def sha1_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def normalize_rom_path(path) -> Path:
+    value = os.fspath(path).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1].strip()
+
+    if os.name != "nt" and _WINDOWS_DRIVE_PATH.match(value):
+        windows_path = PureWindowsPath(value)
+        drive = windows_path.drive[0].lower()
+        return Path("/mnt") / drive / Path(*windows_path.parts[1:])
+
+    return Path(value).expanduser()
+
+
 def validate_rom(path: Path) -> RomValidation:
-    path = Path(path).expanduser().resolve()
+    path = normalize_rom_path(path).resolve()
     if path.suffix.lower() != ".z64":
         raise ValueError("Choose a big-endian .z64 ROM file.")
     if not path.is_file():
