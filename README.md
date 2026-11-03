@@ -14,14 +14,14 @@ A Python console tool that runs in Linux or WSL, for compiling Super Mario 64 On
 Run from the shell:
 
 ```sh
-cd /mnt/c/path/to/sm64-ios-builder
+cd /path/to/sm64-ios-builder
 python3 app.py
 ```
 
-The CLI has a standalone ROM check:
+The CLI has a standalone ROM check if you wish to check a rom beforehand:
 
 ```sh
-python3 app.py --validate-rom "/mnt/c/Users/you/ROMs/baserom.us.z64"
+python3 app.py --validate-rom "baserom.us.z64"
 ```
 
 ## First use
