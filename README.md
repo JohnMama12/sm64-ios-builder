@@ -59,10 +59,10 @@ The default source is `JohnMama12/sm64`, branch
 repository and branch from the CLI. A full app build also requires the user to
 supply the supported ROM; the builder never downloads one.
 
-The interactive terminal menu supports arrow keys and Enter, with number
-shortcuts. Branches and commits use the same keyboard selector; `q` cancels a
-selection or exits the main menu. When run without an interactive terminal,
-the menu falls back to numbered prompts.
+The interactive terminal menu uses a plain-ASCII, full-screen layout similar
+to a Linux installer. Use the arrow keys and Enter to choose an action; branch
+and commit selectors use the same interface. Press `q` to cancel or exit.
+Outside an interactive terminal, it falls back to numbered prompts.
 
 ## Reproducibility
 

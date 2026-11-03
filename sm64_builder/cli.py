@@ -1,8 +1,7 @@
+import curses
 import json
 import os
-import shutil
 import sys
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -63,124 +62,122 @@ def _save_state(state: Dict) -> None:
     temporary.replace(path)
 
 
-def _terminal_colors_enabled() -> bool:
-    return (
-        sys.stdout.isatty()
-        and os.environ.get("TERM", "") != "dumb"
-        and "NO_COLOR" not in os.environ
-    )
-
-
-def _paint(text: str, *styles: str) -> str:
-    if not styles or not _terminal_colors_enabled():
-        return text
-    return "\033[%sm%s\033[0m" % (";".join(styles), text)
-
-
-def _clip(text: str, width: int) -> str:
-    text = str(text)
-    if len(text) <= width:
-        return text
-    if width < 4:
-        return text[:width]
-    return text[: width - 3] + "..."
-
-
-def _draw_dashboard(state: Dict, selected: int) -> None:
-    width = max(58, min(shutil.get_terminal_size((80, 24)).columns, 92))
-    inner = width - 4
-    setup_ready = _is_setup_verified()
-    setup_label = "READY" if setup_ready else "NEEDS SETUP"
-    setup_style = "32" if setup_ready else "33"
-    repository = _clip(state.get("repository", DEFAULT_REPOSITORY), 28)
-    branch = _clip(state.get("branch") or "not selected", 28)
-    rom_path = _clip(state.get("rom_path") or "not selected", inner - 15)
-    commit = state.get("commit")
-    commit_label = commit[:8] if commit else "not selected"
-
-    def row(label: str) -> str:
-        return "  " + label.ljust(inner - 2) + "  "
-
-    top = "╭" + "─" * (width - 2) + "╮"
-    divider = "├" + "─" * (width - 2) + "┤"
-    bottom = "╰" + "─" * (width - 2) + "╯"
-    print("\033[2J\033[H", end="" if _terminal_colors_enabled() else "\n")
-    print(_paint(top, "36", "1"))
-    print("│" + _paint(row("SM64 iOS BUILDER"), "1", "36") + "│")
-    print("│" + _paint(row("WSL build workspace · armv7 · iOS 6.0+"), "2") + "│")
-    print(divider)
-    print(
-        "│"
-        + _paint(row("TOOLCHAIN  " + setup_label), "1", setup_style)
-        + "│"
-    )
-    print("│" + row("SOURCE     " + repository + "  /  " + branch) + "│")
-    print("│" + row("COMMIT     " + commit_label) + "│")
-    print("│" + row("ROM        " + rom_path) + "│")
-    print(divider)
-    print("│" + _paint(row("ACTIONS  ·  ↑/↓ move  Enter select  1–5 shortcut"), "2") + "│")
-    for index, action in enumerate(MAIN_ACTIONS):
-        label = "  [%d]  %s" % (index + 1, action)
-        if index == selected:
-            label = "  › " + _clip(label[2:], inner - 4)
-            print("│" + _paint(row(label), "30", "46", "1") + "│")
-        else:
-            print("│" + row(label) + "│")
-    print(_paint(bottom, "36", "1"))
-
-
-def _draw_choices(title: str, options, selected: int, first_visible: int) -> None:
-    width = max(58, min(shutil.get_terminal_size((80, 24)).columns, 92))
-    inner = width - 4
-    top = "╭" + "─" * (width - 2) + "╮"
-    divider = "├" + "─" * (width - 2) + "┤"
-    bottom = "╰" + "─" * (width - 2) + "╯"
-    visible_count = max(4, min(12, shutil.get_terminal_size((80, 24)).lines - 9))
-    print("\033[2J\033[H", end="" if _terminal_colors_enabled() else "\n")
-    print(_paint(top, "36", "1"))
-    print("│" + _paint(("  " + _clip(title, inner - 2)).ljust(inner + 2), "1", "36") + "│")
-    print(divider)
-    last_visible = min(len(options), first_visible + visible_count)
-    for index in range(first_visible, last_visible):
-        label = "  [%d]  %s" % (index + 1, options[index])
-        label = _clip(label, inner)
-        if index == selected:
-            label = "  › " + _clip(label[2:], inner - 4)
-            print("│" + _paint(("  " + label).ljust(inner + 2), "30", "46", "1") + "│")
-        else:
-            print("│" + ("  " + label).ljust(inner + 2) + "│")
-    for _ in range(visible_count - (last_visible - first_visible)):
-        print("│" + " " * (inner + 2) + "│")
-    print(divider)
-    print("│" + _paint(("  ↑/↓ move  Enter select  1–9 jump  q cancel").ljust(inner + 2), "2") + "│")
-    print(_paint(bottom, "36", "1"))
-
-
-@contextmanager
-def _terminal_keys():
-    import termios
-    import tty
-
-    descriptor = sys.stdin.fileno()
-    previous = termios.tcgetattr(descriptor)
+def _safe_addstr(screen, row: int, column: int, text: str, style: int = 0) -> None:
+    height, width = screen.getmaxyx()
+    if row < 0 or row >= height or column < 0 or column >= width:
+        return
+    ascii_text = str(text).encode("ascii", errors="replace").decode("ascii")
     try:
-        tty.setraw(descriptor)
-        yield
-    finally:
-        termios.tcsetattr(descriptor, termios.TCSADRAIN, previous)
+        screen.addnstr(row, column, ascii_text, width - column - 1, style)
+    except curses.error:
+        pass
 
 
-def _read_key() -> str:
-    import select
+def _curses_menu(screen, title: str, options, selected: int, status_lines=()):
+    screen.keypad(True)
+    try:
+        curses.curs_set(0)
+    except curses.error:
+        pass
 
-    descriptor = sys.stdin.fileno()
-    key = os.read(descriptor, 1).decode("ascii", errors="ignore")
-    if key == "\x1b":
-        if select.select([descriptor], [], [], 0.05)[0]:
-            key += os.read(descriptor, 1).decode("ascii", errors="ignore")
-            if key == "\x1b[" and select.select([descriptor], [], [], 0.05)[0]:
-                key += os.read(descriptor, 1).decode("ascii", errors="ignore")
-    return key
+    normal = curses.A_NORMAL
+    heading = curses.A_BOLD
+    selected_style = curses.A_REVERSE | curses.A_BOLD
+    status_style = curses.A_BOLD
+    if curses.has_colors():
+        curses.start_color()
+        try:
+            curses.use_default_colors()
+        except curses.error:
+            pass
+        curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLUE)
+        curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLUE)
+        curses.init_pair(3, curses.COLOR_YELLOW, curses.COLOR_BLUE)
+        curses.init_pair(4, curses.COLOR_BLACK, curses.COLOR_WHITE)
+        normal = curses.color_pair(1)
+        heading = curses.color_pair(2) | curses.A_BOLD
+        selected_style = curses.color_pair(4) | curses.A_BOLD
+        status_style = curses.color_pair(3) | curses.A_BOLD
+        screen.bkgd(" ", normal)
+
+    selected = min(max(selected, 0), len(options) - 1)
+    while True:
+        screen.erase()
+        height, width = screen.getmaxyx()
+        if height < 12 or width < 48:
+            _safe_addstr(screen, 0, 0, "Please enlarge the terminal (minimum 48x12).", heading)
+            _safe_addstr(screen, max(1, height - 1), 0, "Press q to cancel.", normal)
+            screen.refresh()
+            key = screen.getch()
+            if key in (ord("q"), ord("Q"), 27, 3):
+                return None
+            continue
+
+        inner_width = width - 4
+        _safe_addstr(screen, 0, 1, "+" + "-" * (width - 3), heading)
+        _safe_addstr(screen, 1, 2, "SM64 iOS BUILDER", heading)
+        _safe_addstr(screen, 2, 1, "+" + "-" * (width - 3), heading)
+        _safe_addstr(screen, 3, 2, title[:inner_width], heading)
+
+        row = 4
+        if status_lines:
+            row += 1
+            _safe_addstr(screen, row, 2, "SYSTEM STATUS", status_style)
+            row += 1
+            for status in status_lines:
+                _safe_addstr(screen, row, 2, status, normal)
+                row += 1
+            row += 1
+            _safe_addstr(screen, row, 1, "+" + "-" * (width - 3), heading)
+            row += 1
+
+        list_start = row
+        footer_row = height - 2
+        visible_count = max(1, footer_row - list_start - 1)
+        first_visible = max(0, min(selected - visible_count + 1, len(options) - visible_count))
+        for index in range(first_visible, min(len(options), first_visible + visible_count)):
+            label = "%2d. %s" % (index + 1, options[index])
+            style = selected_style if index == selected else normal
+            _safe_addstr(
+                screen,
+                list_start + index - first_visible,
+                2,
+                label[:inner_width],
+                style,
+            )
+
+        _safe_addstr(screen, footer_row, 1, "+" + "-" * (width - 3), heading)
+        _safe_addstr(
+            screen,
+            footer_row + 1,
+            2,
+            "UP/DOWN Move   ENTER Select   1-9 Jump   Q Cancel",
+            normal,
+        )
+        screen.refresh()
+        key = screen.getch()
+        if key in (curses.KEY_ENTER, 10, 13):
+            return selected
+        if key in (ord("q"), ord("Q"), 27, 3):
+            return None
+        if key == curses.KEY_UP:
+            selected = (selected - 1) % len(options)
+        elif key == curses.KEY_DOWN:
+            selected = (selected + 1) % len(options)
+        elif key == curses.KEY_PPAGE:
+            selected = max(0, selected - visible_count)
+        elif key == curses.KEY_NPAGE:
+            selected = min(len(options) - 1, selected + visible_count)
+        elif key == curses.KEY_HOME:
+            selected = 0
+        elif key == curses.KEY_END:
+            selected = len(options) - 1
+        elif ord("1") <= key <= ord("9"):
+            option_index = key - ord("1")
+            if option_index < len(options):
+                return option_index
+        elif key == curses.KEY_RESIZE:
+            continue
 
 
 def _select_option(title: str, options, default_index: int = 0) -> Optional[int]:
@@ -211,28 +208,34 @@ def _select_option(title: str, options, default_index: int = 0) -> Optional[int]
                 return choice
             print("Choose a listed number or q to cancel.")
 
-    visible_count = max(4, min(12, shutil.get_terminal_size((80, 24)).lines - 9))
-    first_visible = max(0, min(selected - visible_count + 1, len(options) - visible_count))
-    first_visible = max(0, first_visible)
-    with _terminal_keys():
-        while True:
-            _draw_choices(title, options, selected, first_visible)
-            key = _read_key()
-            if key in ("\r", "\n"):
-                return selected
-            if key in ("q", "Q", "\x03", "\x1b"):
-                return None
-            if key in ("\x1b[A", "k"):
-                selected = (selected - 1) % len(options)
-            elif key in ("\x1b[B", "j"):
-                selected = (selected + 1) % len(options)
-            elif key.isdigit() and key != "0":
-                choice = int(key) - 1
-                if choice < len(options):
-                    return choice
-            first_visible = max(
-                0, min(selected - visible_count + 1, len(options) - visible_count)
-            )
+    try:
+        return curses.wrapper(_curses_menu, title, options, selected)
+    except curses.error:
+        print("Interactive terminal menu unavailable; using numbered choices.")
+        return _select_option_fallback(title, options, selected)
+
+
+def _select_option_fallback(title: str, options, selected: int) -> Optional[int]:
+    print("\n%s" % title)
+    for index, option in enumerate(options, 1):
+        print("%3d. %s" % (index, option))
+    while True:
+        try:
+            answer = input("Choose a number [%d], or q to cancel: " % (selected + 1)).strip().lower()
+        except EOFError:
+            return None
+        if answer == "q":
+            return None
+        if not answer:
+            return selected
+        try:
+            choice = int(answer) - 1
+        except ValueError:
+            print("Enter a listed number or q to cancel.")
+            continue
+        if 0 <= choice < len(options):
+            return choice
+        print("Choose a listed number or q to cancel.")
 
 
 def _choose_commit(state: Dict) -> None:
@@ -419,22 +422,27 @@ def run_cli() -> int:
                 continue
             selected_action = int(choice) - 1
         else:
-            with _terminal_keys():
-                while True:
-                    _draw_dashboard(state, selected_action)
-                    key = _read_key()
-                    if key in ("\r", "\n"):
-                        break
-                    if key in ("q", "Q", "\x03"):
-                        return 0
-                    if key in ("\x1b[A", "k"):
-                        selected_action = (selected_action - 1) % len(MAIN_ACTIONS)
-                    elif key in ("\x1b[B", "j"):
-                        selected_action = (selected_action + 1) % len(MAIN_ACTIONS)
-                    elif key.isdigit() and key != "0":
-                        selected_action = int(key) - 1
-                        if selected_action < len(MAIN_ACTIONS):
-                            break
+            status_lines = (
+                "Theos / iOS SDK: %s"
+                % ("READY" if _is_setup_verified() else "NEEDS SETUP"),
+                "Source: %s / %s"
+                % (
+                    state.get("repository", DEFAULT_REPOSITORY),
+                    state.get("branch") or "branch not selected",
+                ),
+                "Commit: %s"
+                % (selected_commit[:8] if selected_commit else "not selected"),
+                "ROM: %s" % (state.get("rom_path") or "not selected"),
+            )
+            selected_action = curses.wrapper(
+                _curses_menu,
+                "Select an action",
+                MAIN_ACTIONS,
+                selected_action,
+                status_lines,
+            )
+            if selected_action is None:
+                return 0
         try:
             if selected_action == 0:
                 _setup(print)
