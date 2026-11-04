@@ -33,33 +33,48 @@ class BuildResult:
     package_path: Path
 
 
-def _build_directory(repository: str, version: str, rom_sha1: str) -> Path:
+def _build_directory(repository: str, source_ref: str, rom_sha1: str) -> Path:
     slug = repository.replace("/", "-").lower()
+    ref_slug = re.sub(r"[^A-Za-z0-9.+~-]+", "-", source_ref).strip("-")
     return app_data_dir() / "builds" / (
-        "%s-%s-%s" % (slug, version, rom_sha1[:12])
+        "%s-%s-%s" % (slug, ref_slug, rom_sha1[:12])
     )
 
 
-def _clone_at_version(
+def _clone_at_ref(
     repository: str,
-    version: str,
+    source_ref: str,
+    source_kind: str,
     rom_sha1: str,
     output: Callable[[str], None],
 ) -> Tuple[Path, str]:
     repository = validate_repository(repository)
-    if not re.fullmatch(
-        r"v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?",
-        version,
-    ):
-        raise ValueError("Selected source version must use a semantic version tag.")
+    if source_kind == "release":
+        if not re.fullmatch(
+            r"v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?",
+            source_ref,
+        ):
+            raise ValueError("Selected source release must use a semantic version tag.")
+    elif source_kind == "branch":
+        if (
+            not source_ref
+            or source_ref.startswith("-")
+            or source_ref.startswith("/")
+            or source_ref.endswith("/")
+            or ".." in source_ref
+            or not re.fullmatch(r"[A-Za-z0-9._/-]+", source_ref)
+        ):
+            raise ValueError("Selected source branch name is invalid.")
+    else:
+        raise ValueError("Source kind must be 'release' or 'branch'.")
     source_url = "https://github.com/%s.git" % repository
-    target = _build_directory(repository, version, rom_sha1)
+    target = _build_directory(repository, source_ref, rom_sha1)
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         output("Removing the previous build workspace for this version/ROM pair.")
         shutil.rmtree(target)
 
-    output("Cloning %s, source version %s." % (repository, version))
+    output("Cloning %s, source %s %s." % (repository, source_kind, source_ref))
     run(
         [
             "git",
@@ -68,7 +83,7 @@ def _clone_at_version(
             "1",
             "--single-branch",
             "--branch",
-            version,
+            source_ref,
             source_url,
             str(target),
         ],
@@ -76,14 +91,18 @@ def _clone_at_version(
     )
     resolved = capture(["git", "rev-parse", "HEAD"], cwd=target)
     if not re.fullmatch(r"[0-9a-f]{40}", resolved.lower()):
-        raise BuildError("Git returned an invalid source commit for %s." % version)
-    output("Pinned source version %s to commit %s." % (version, resolved.lower()))
+        raise BuildError("Git returned an invalid source commit for %s." % source_ref)
+    output(
+        "Pinned source %s %s to commit %s."
+        % (source_kind, source_ref, resolved.lower())
+    )
     return target, resolved.lower()
 
 
 def build_deb(
     repository: str,
-    version: str,
+    source_ref: str,
+    source_kind: str,
     rom: RomValidation,
     jobs: int,
     output: Callable[[str], None],
@@ -99,7 +118,9 @@ def build_deb(
     if not sdk.is_dir() or not clang.is_file():
         raise BuildError("Run the Theos setup and smoke test before compiling.")
 
-    root, commit = _clone_at_version(repository, version, rom.sha1, output)
+    root, commit = _clone_at_ref(
+        repository, source_ref, source_kind, rom.sha1, output
+    )
     if not (root / "src" / "ios" / "Makefile.ios").is_file():
         raise BuildError("Selected commit does not contain src/ios/Makefile.ios.")
     if not (root / "extract_assets.py").is_file() or not (root / "assets.json").is_file():
@@ -141,19 +162,30 @@ def build_deb(
 
     app_bundle = ios_dir / "build" / "SM64.app"
     package_dir = app_data_dir() / "packages"
-    output_path = package_dir / (
-        "sm64_%s+%s_%s.deb"
-        % (PACKAGE_NAME, version, PACKAGE_ARCHITECTURE)
+    if source_kind == "release":
+        package_version = (
+            source_ref.removeprefix("v").replace("-", "~")
+            + "+"
+            + commit[:8]
+        )
+    else:
+        branch_slug = re.sub(r"[^A-Za-z0-9.+~-]+", "-", source_ref).strip("-")
+        package_version = "0~branch-%s+%s" % (branch_slug.lower(), commit[:8])
+    output_path = package_dir / "sm64_%s_%s.deb" % (
+        package_version,
+        PACKAGE_ARCHITECTURE,
     )
     output("Creating local package %s." % output_path)
     package = create_deb(
         app_bundle=app_bundle,
         output_path=output_path,
         package=PACKAGE_NAME,
-        version=version.removeprefix("v").replace("-", "~") + "+" + commit[:8],
+        version=package_version,
         architecture=PACKAGE_ARCHITECTURE,
         minimum_ios=PACKAGE_MIN_IOS,
     )
     run(["dpkg-deb", "--info", str(package)], output=output)
     output("Build complete: %s" % package)
-    return BuildResult(version, commit, rom.sha1, package)
+    return BuildResult(
+        "%s:%s" % (source_kind, source_ref), commit, rom.sha1, package
+    )

@@ -24,6 +24,12 @@ class SourceRelease:
         return self.name or self.tag
 
 
+@dataclass(frozen=True)
+class SourceBranch:
+    name: str
+    commit: str
+
+
 class GitHubError(RuntimeError):
     pass
 
@@ -75,4 +81,19 @@ def list_source_releases(repository: str) -> List[SourceRelease]:
                     url=record.get("html_url") or "",
                 )
             )
-    return releases
+    return sorted(releases, key=lambda release: release.published_at, reverse=True)
+
+
+def list_source_branches(repository: str) -> List[SourceBranch]:
+    repository = validate_repository(repository)
+    url = "%s/repos/%s/branches?per_page=100" % (_API_ROOT, repository)
+    records = _request_json(url)
+    if not isinstance(records, list):
+        raise GitHubError("Unexpected branch list returned by GitHub.")
+    branches = []
+    for record in records:
+        name = record.get("name")
+        commit = record.get("commit", {}).get("sha")
+        if name and commit and re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+            branches.append(SourceBranch(name=name, commit=commit.lower()))
+    return branches
