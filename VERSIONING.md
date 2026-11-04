@@ -23,8 +23,9 @@ fixes. After `1.0.0`, use `MAJOR` for breaking changes.
 ## Current beta sequence
 
 The latest published builder beta is `v0.1.0-beta.1`. The release-and-branch
-source picker begins a new feature beta cycle at `v0.2.0-beta.1`, tagged on a
-development branch. Further builder changes within this cycle use
+source picker began a new feature beta cycle at `v0.2.0-beta.1`, tagged on a
+development branch. The current beta is `v0.2.0-beta.2`; further builder
+changes within this cycle use
 `v0.2.0-beta.2`, `v0.2.0-beta.3`, and so on. When ready, publish stable
 `v0.2.0` from `main`. After that, a compatible bug fix is `v0.2.1`, a
 backwards-compatible feature is `v0.3.0`, and a breaking change is `v1.0.0`

@@ -68,8 +68,8 @@ python3 app.py --validate-rom "baserom.us.z64"
 
 ## Versioning
 
-The builder has an independent semantic version from the iOS source. Its next
-feature beta is `v0.2.0-beta.1`, tagged on a development branch. The source
+The builder has an independent semantic version from the iOS source. Its current
+feature beta is `v0.2.0-beta.2`, tagged on a development branch. The source
 picker defaults to published releases and also offers source branches.
 `master` remains the stable source line; other branches are development/testing
 targets, not releases. See

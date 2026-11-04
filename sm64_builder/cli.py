@@ -486,7 +486,7 @@ def run_cli() -> int:
             if selected_action == 0:
                 _setup(print)
             elif selected_action == 1:
-                _choose_version(state)
+                _choose_source(state)
             elif selected_action == 2:
                 _choose_rom(state)
             elif selected_action == 3:
