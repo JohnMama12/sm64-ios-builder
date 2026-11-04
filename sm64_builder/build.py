@@ -171,9 +171,8 @@ def build_deb(
     else:
         branch_slug = re.sub(r"[^A-Za-z0-9.+~-]+", "-", source_ref).strip("-")
         package_version = "0~branch-%s+%s" % (branch_slug.lower(), commit[:8])
-    output_path = package_dir / "sm64_%s_%s.deb" % (
-        package_version,
-        PACKAGE_ARCHITECTURE,
+    output_path = package_dir / (
+        "sm64_%s_%s.deb" % (package_version, PACKAGE_ARCHITECTURE)
     )
     output("Creating local package %s." % output_path)
     package = create_deb(
