@@ -34,10 +34,14 @@ python3 app.py --validate-rom "baserom.us.z64"
    only after that test succeeds. The selected SDK is iOS 6.1; the app's
    minimum deployment target remains iOS 6.0.
 
-2. Choose a published source version from the GitHub Releases list for
-   `JohnMama12/sm64`. The builder shows release tags and notes, not every commit
-   or source tweak. Custom repositories must also publish GitHub Releases with
-   semantic version tags such as `v0.1.0-beta.1`.
+2. Choose a source type and repository revision. Published releases are the
+   recommended, reproducible choice; the newest release is listed first.
+   `master` is the stable source branch. All other branches, including
+   `johnmama12-ios-app-publishing`, are for development/testing and are labeled
+   as such. A branch build clones the selected branch and records the exact
+   commit used, though a later build from that branch may use a newer commit.
+   Custom repositories can use either published semantic-version releases or
+   branches.
 
 3. Select an authentic, legally obtained, big-endian `.z64` ROM. The only
    end-to-end supported version is US (NTSC-U), SHA-1
@@ -48,8 +52,9 @@ python3 app.py --validate-rom "baserom.us.z64"
    corresponding WSL `/mnt/c/...` path.
 
 4. Confirm you own the ROM and acknowledge the binary distribution restriction.
-   The builder checks out the selected release tag, runs `make assets VERSION=us`
-   to use that source revision's existing Python extraction/build pipeline,
+   The builder checks out the selected release or branch, records the resolved
+   source commit, runs `make assets VERSION=us` to use that source revision's
+   existing Python extraction/build pipeline,
    then compiles the iOS app and writes a `.deb` under
    `~/.local/share/sm64-ios-builder/packages/`
    To it run on your device you should have iFile installed.
@@ -63,10 +68,13 @@ python3 app.py --validate-rom "baserom.us.z64"
 
 ## Versioning
 
-The source and builder repositories use Git tags and GitHub Releases following
-Semantic Versioning. The initial beta release is `v0.1.0-beta.1`; while in beta,
-increment the beta number for each published source release. The version picker
-lists only published source releases, keeping routine commits out of the choices.
+The builder has an independent semantic version from the iOS source. Its current
+feature beta is `v0.2.0-beta.3`, tagged on a development branch. The source
+picker defaults to published releases and also offers source branches.
+`master` remains the stable source line; other branches are development/testing
+targets, not releases. See
+[VERSIONING.md](VERSIONING.md) for increment rules and release checklists for
+both version tracks.
 
 ## Binary redistribution warning
 

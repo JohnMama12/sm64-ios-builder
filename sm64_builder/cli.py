@@ -14,6 +14,7 @@ from .config import (
 )
 from .github import (
     GitHubError,
+    list_source_branches,
     list_source_releases,
     validate_repository,
 )
@@ -26,7 +27,7 @@ SETUP_MARKER = "setup-verified.json"
 
 MAIN_ACTIONS = (
     "Set up iOS Compiler (Theos)",
-    "Choose iOS Version",
+    "Choose iOS Source",
     "Validate your US ROM",
     "Build Game",
     "Exit",
@@ -235,7 +236,7 @@ def _select_option_fallback(title: str, options, selected: int) -> Optional[int]
         print("Choose a listed number or q to cancel.")
 
 
-def _choose_version(state: Dict) -> None:
+def _choose_source(state: Dict) -> None:
     repository = validate_repository(
         input(
             "[OPTIONAL] GitHub source repository [%s]: "
@@ -243,41 +244,80 @@ def _choose_version(state: Dict) -> None:
         )
         or state.get("repository", DEFAULT_REPOSITORY)
     )
-    print(
-        "Loading published source versions from https://github.com/%s ..."
-        % repository
+    source_modes = (
+        "Published releases (recommended; latest release first)",
+        "Branches (moving targets; commit is pinned when building)",
     )
-    releases = list_source_releases(repository)
-    if not releases:
-        raise GitHubError(
-            "No published releases were found for %s. "
-            "The source repository must publish versioned GitHub releases."
-            % repository
-        )
-    version_options = [
-        "%s  %s  %s"
-        % (release.tag, release.published_at[:10], release.title)
-        for release in releases
-    ]
-    version_index = _select_option(
-        "Choose a published iOS version", version_options
-    )
-    if version_index is None:
+    mode_index = _select_option("Choose a source type", source_modes)
+    if mode_index is None:
         return
-    selected = releases[version_index]
 
     state["repository"] = repository
-    state["source_version"] = selected.tag
-    state.pop("branch", None)
-    state.pop("commit", None)
-    print("\n%s" % selected.title)
-    print("Version tag: %s" % selected.tag)
-    if selected.body:
-        print(selected.body[:4000])
-    if selected.url:
-        print("\nRelease notes: %s" % selected.url)
+    if mode_index == 0:
+        print(
+            "Loading published source versions from https://github.com/%s ..."
+            % repository
+        )
+        releases = list_source_releases(repository)
+        if not releases:
+            raise GitHubError(
+                "No published releases were found for %s. "
+                "The source repository must publish versioned GitHub releases."
+                % repository
+            )
+        release_options = [
+            "%s  %s  %s"
+            % (release.tag, release.published_at[:10], release.title)
+            for release in releases
+        ]
+        release_index = _select_option(
+            "Choose a published iOS version", release_options
+        )
+        if release_index is None:
+            return
+        selected = releases[release_index]
+        state["source_kind"] = "release"
+        state["source_ref"] = selected.tag
+        state["source_version"] = selected.tag
+        print("\n%s" % selected.title)
+        print("Version tag: %s" % selected.tag)
+        if selected.body:
+            print(selected.body[:4000])
+        if selected.url:
+            print("\nRelease notes: %s" % selected.url)
+        selection_label = "release %s" % selected.tag
+    else:
+        print("Loading branches from https://github.com/%s ..." % repository)
+        branches = list_source_branches(repository)
+        if not branches:
+            raise GitHubError("No branches were found for %s." % repository)
+        branch_options = [
+            "%s [%s]  (%s)"
+            % (
+                branch.name,
+                "STABLE" if branch.name == "master" else "DEVELOPMENT",
+                branch.commit[:8],
+            )
+            for branch in branches
+        ]
+        branch_index = _select_option("Choose a source branch", branch_options)
+        if branch_index is None:
+            return
+        selected = branches[branch_index]
+        state["source_kind"] = "branch"
+        state["source_ref"] = selected.name
+        state.pop("source_version", None)
+        state.pop("source_commit", None)
+        selection_label = "branch %s at %s" % (
+            selected.name,
+            selected.commit[:8],
+        )
+        print(
+            "\nSelected branch %s at commit %s."
+            % (selected.name, selected.commit)
+        )
     _save_state(state)
-    print("\nSelected source version %s." % selected.tag)
+    print("\nSelected source %s." % selection_label)
 
 
 def _choose_rom(state: Dict) -> Optional[RomValidation]:
@@ -341,8 +381,10 @@ def _is_setup_verified() -> bool:
 def _compile(state: Dict) -> None:
     if not _is_setup_verified():
         raise SetupError("Run setup and pass the Theos smoke test before compiling.")
-    if not all(state.get(key) for key in ("repository", "source_version")):
-        raise ValueError("Select a published iOS source version first.")
+    source_kind = state.get("source_kind", "release")
+    source_ref = state.get("source_ref") or state.get("source_version")
+    if source_kind not in ("release", "branch") or not source_ref:
+        raise ValueError("Select a published release or source branch first.")
     rom = _saved_rom(state)
     if rom is None or not rom.supported:
         raise ValueError("Select and validate a supported US .z64 ROM first.")
@@ -372,7 +414,8 @@ def _compile(state: Dict) -> None:
 
     result = build_deb(
         repository=state["repository"],
-        version=state["source_version"],
+        source_ref=source_ref,
+        source_kind=source_kind,
         rom=rom,
         jobs=jobs,
         output=print,
@@ -389,7 +432,8 @@ def run_cli() -> int:
         return 1
 
     while True:
-        selected_version = state.get("source_version")
+        selected_version = state.get("source_ref") or state.get("source_version")
+        selected_kind = state.get("source_kind", "release")
         selected_action = 0
         if not sys.stdin.isatty():
             print(
@@ -399,7 +443,11 @@ def run_cli() -> int:
                     "ready" if _is_setup_verified() else "needs setup",
                     state.get("repository", "(not selected)"),
                     state.get("rom_path", "(not selected)"),
-                    selected_version or "(not selected)",
+                    (
+                        "%s: %s" % (selected_kind, selected_version)
+                        if selected_version
+                        else "(not selected)"
+                    ),
                 )
             )
             try:
@@ -417,7 +465,12 @@ def run_cli() -> int:
                 "Theos / iOS SDK: %s"
                 % ("Already Installed" if _is_setup_verified() else "NEEDS SETUP"),
                 "Source: %s" % state.get("repository", DEFAULT_REPOSITORY),
-                "iOS version: %s" % (selected_version or "not selected"),
+                "iOS source: %s"
+                % (
+                    "%s: %s" % (selected_kind, selected_version)
+                    if selected_version
+                    else "not selected"
+                ),
                 "ROM: %s" % (state.get("rom_path") or "not selected"),
             )
             selected_action = curses.wrapper(
@@ -433,7 +486,7 @@ def run_cli() -> int:
             if selected_action == 0:
                 _setup(print)
             elif selected_action == 1:
-                _choose_version(state)
+                _choose_source(state)
             elif selected_action == 2:
                 _choose_rom(state)
             elif selected_action == 3:
